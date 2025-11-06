@@ -1,0 +1,72 @@
+services:
+  db:
+    image: postgres:14
+    container_name: airektor_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-Start_Up}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-7778}
+    ports:
+      - "55432:5432"   # host 55432 -> container 5432 (5432 hostda band)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-Start_Up}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: airektor_pgadmin
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-elyornabijonov@icloud.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin123}
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin:/var/lib/pgadmin
+
+  app:
+    build: .
+    container_name: airektor_app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_DSN: ${DB_DSN:-postgresql://postgres:7778@db:5432/Start_Up}
+      DB_SCHEMA: ${DB_SCHEMA:-ai_rektor}
+      CACHE_TTL_SEC: ${CACHE_TTL_SEC:-300}
+    volumes:
+      - ./:/app
+    ports:
+      - "8501:8501"
+
+  etl:
+    build: .
+    container_name: airektor_etl
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DSN: ${DSN:-postgresql://postgres:7778@db:5432/Start_Up}
+      DATA_DIR: /app/data
+      REFRESH_INTERVAL_MIN: ${REFRESH_INTERVAL_MIN:-2}
+      ETL_MODE: ${ETL_MODE:-watch}
+    volumes:
+      - ./:/app
+    command: >
+      sh -c '
+        if [ "${ETL_MODE}" = "once" ]; then
+          python main.py --data-dir /app/data --once --refresh-mv --log-level INFO;
+        else
+          python main.py --data-dir /app/data --watch --interval ${REFRESH_INTERVAL_MIN} --refresh-mv --log-level INFO;
+        fi
+      '
+
+volumes:
+  pgdata:
+  pgadmin:
