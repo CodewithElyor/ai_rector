@@ -1,6 +1,8 @@
 streamlit
+pandas
 sqlalchemy
 psycopg2-binary
-pandas
-python-dotenv
 plotly
+python-dotenv
+openpyxl==3.1.5
+XlsxWriter==3.2.0
