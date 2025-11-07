@@ -1,11 +1,19 @@
+<<<<<<< HEAD
 # app.py — AI-Rektor (Streamlit Cloud uchun)
 import os
+=======
+# app.py — AI-Rektor (Auth + Admin + Rektor)
+# -*- coding: utf-8 -*-
+
+import os, sys
+>>>>>>> fd66768c (Auth + Admin + Rektor tab; dark UI; deps pinned)
 from typing import Dict, Any, Tuple
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from sqlalchemy import create_engine, text
+<<<<<<< HEAD
 
 # Auth
 import streamlit_authenticator as stauth
@@ -290,9 +298,140 @@ def where_clause(term: str, faculty: str) -> Tuple[str, Dict[str, Any]]:
     if faculty != "Barchasi":
         w.append("faculty = :faculty"); p["faculty"] = faculty
     return ("WHERE " + " AND ".join(w)) if w else "", p
+=======
+from dotenv import load_dotenv
+import streamlit_authenticator as stauth
 
+# --------------------------
+# YUKLASHLAR
+# --------------------------
+load_dotenv()
+DB_DSN    = os.getenv("DB_DSN", "postgresql://postgres:7778@localhost:5432/Start_Up")
+DB_SCHEMA = os.getenv("DB_SCHEMA", "ai_rektor")
+CACHE_TTL = int(os.getenv("CACHE_TTL_SEC", "300"))
+AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() in ("1", "true", "yes")
+
+# Foydalanuvchi va rollar
+APP_USERS = os.getenv("APP_USERS", "admin:Admin@2025;rektor:Rektor@2025;dekan:Dekan@2025")
+APP_ROLES = os.getenv("APP_ROLES", "admin:admin;rektor:rektor;dekan:manager")
+APP_COOKIE_NAME = os.getenv("APP_COOKIE_NAME", "ai_rektor_auth")
+APP_COOKIE_KEY  = os.getenv("APP_COOKIE_KEY", "super_secret_cookie")
+APP_COOKIE_DAYS = int(os.getenv("APP_COOKIE_DAYS", "7"))
+
+# --------------------------
+# Streamlit UI sozlamalari
+# --------------------------
+st.set_page_config(
+    page_title="🎓 AI-Rektor Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+st.markdown("""
+<style>
+body {background-color: #0b1220;}
+h1,h2,h3,h4,h5,h6 {color:#e5e7eb;}
+.stApp {background: radial-gradient(1400px 600px at 20% -10%, #0b1220 0, #020617 100%);}
+.metric-card {
+  background: linear-gradient(180deg, #0f172a 0%, #0b1220 100%);
+  border-radius: 14px; padding: 16px; border: 1px solid #1f2937;
+}
+.metric-title {font-size:12px;color:#94a3b8;}
+.metric-value {font-size:28px;font-weight:700;color:#f1f5f9;}
+.metric-sub {font-size:12px;color:#a1a1aa;}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🎓 AI-Rektor Dashboard")
+
+# --------------------------
+# DATABASE CONNECTION
+# --------------------------
+@st.cache_resource(show_spinner=False)
+def get_engine():
+    return create_engine(DB_DSN, pool_size=5, max_overflow=5, pool_pre_ping=True, future=True)
+engine = get_engine()
+
+@st.cache_data(ttl=600)
+def detect_views(schema: str) -> Dict[str, str]:
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql(f"SET search_path TO {schema}, public;")
+            mv = pd.read_sql(text("SELECT matviewname FROM pg_matviews WHERE schemaname=:s"), conn, params={"s": schema})
+            mvs = set(mv["matviewname"].tolist()) if not mv.empty else set()
+            return {
+                "ss": "mv_student_success" if "mv_student_success" in mvs else "vw_student_success",
+                "tp": "mv_teacher_perf" if "mv_teacher_perf" in mvs else "vw_teacher_perf",
+                "fn": "mv_fin_summary" if "mv_fin_summary" in mvs else "vw_fin_summary"
+            }
+    except Exception:
+        return {"ss": "vw_student_success", "tp": "vw_teacher_perf", "fn": "vw_fin_summary"}
+
+NAMES = detect_views(DB_SCHEMA)
+VIEW_SS, VIEW_TP, VIEW_FN = NAMES["ss"], NAMES["tp"], NAMES["fn"]
+
+@st.cache_data(ttl=CACHE_TTL)
+def run_sql_cached(sql, params=None):
+    with engine.connect() as conn:
+        conn.exec_driver_sql(f"SET search_path TO {DB_SCHEMA}, public;")
+        return pd.read_sql(text(sql), conn, params=params)
+
+# --------------------------
+# AUTHENTICATION
+# --------------------------
+def parse_env_map(env: str) -> Dict[str, str]:
+    res = {}
+    for pair in env.split(";"):
+        if ":" in pair:
+            k,v = pair.split(":",1)
+            res[k.strip()] = v.strip()
+    return res
+
+USERS = parse_env_map(APP_USERS)
+ROLES = parse_env_map(APP_ROLES)
+cfg = {"credentials":{"usernames":{}}, "cookies":{"name":APP_COOKIE_NAME,"key":APP_COOKIE_KEY,"expiry_days":APP_COOKIE_DAYS}}
+for u,p in USERS.items():
+    cfg["credentials"]["usernames"][u] = {"name":u.capitalize(),"password":stauth.Hasher([p]).generate()[0],"email":f"{u}@example.com"}
+
+authenticator = stauth.Authenticate(cfg["credentials"], APP_COOKIE_NAME, APP_COOKIE_KEY, APP_COOKIE_DAYS)
+
+if AUTH_ENABLED:
+    name, auth_status, username = authenticator.login("🔐 Tizimga kirish", "main")
+    if not auth_status:
+        if auth_status is False: st.error("Login yoki parol noto‘g‘ri.")
+        elif auth_status is None: st.info("Iltimos, tizimga kiring.")
+        st.stop()
+    authenticator.logout("Chiqish", "sidebar")
+    st.sidebar.success(f"👋 Salom, {name}!")
+else:
+    username, name = "admin", "Admin"
+
+ROLE = ROLES.get(username, "user")
+
+# --------------------------
+# Filtrlar
+# --------------------------
+st.sidebar.header("⚙️ Filtrlar")
+try:
+    terms = run_sql_cached(f"SELECT DISTINCT term FROM {VIEW_SS} ORDER BY term;")["term"].tolist()
+except:
+    terms = []
+term = st.sidebar.selectbox("Term", ["Barchasi"] + terms)
+try:
+    facs = run_sql_cached(f"SELECT DISTINCT faculty FROM {VIEW_SS} ORDER BY faculty;")["faculty"].tolist()
+except:
+    facs = []
+faculty = st.sidebar.selectbox("Fakultet", ["Barchasi"] + facs)
+row_limit = st.sidebar.slider("Jadval limiti", 50, 3000, 300, 50)
+>>>>>>> fd66768c (Auth + Admin + Rektor tab; dark UI; deps pinned)
+
+def where_clause(term, faculty):
+    w,p=[],{}
+    if term!="Barchasi": w.append("term=:term"); p["term"]=term
+    if faculty!="Barchasi": w.append("faculty=:faculty"); p["faculty"]=faculty
+    return ("WHERE "+ " AND ".join(w)) if w else "", p
 where_sql, params = where_clause(term, faculty)
 
+<<<<<<< HEAD
 # -------------------------
 # Tabs
 # -------------------------
@@ -300,18 +439,48 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Umumiy", "🎓 Talabalar", "👩�
 
 # ===== Umumiy =====
 with tab1:
+=======
+# --------------------------
+# KPI yordamchi
+# --------------------------
+def kpi_card(title, value, sub):
+    st.markdown(f"""
+    <div class="metric-card">
+      <div class="metric-title">{title}</div>
+      <div class="metric-value">{value}</div>
+      <div class="metric-sub">{sub}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# --------------------------
+# TABS: 6 ta
+# --------------------------
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📊 Umumiy", "🎓 Talabalar", "👩‍🏫 O‘qituvchilar", "💼 Moliya", "🛠️ Admin", "🏛️ Rektor"
+])
+
+# ==== 1) Umumiy ====
+with tab1:
+    st.subheader("Umumiy ko‘rsatkichlar")
+>>>>>>> fd66768c (Auth + Admin + Rektor tab; dark UI; deps pinned)
     kpi_sql = f"""
     SELECT
       SUM(students)::bigint AS students,
-      ROUND(AVG(avg_gpa)::numeric, 2) AS avg_gpa,
-      ROUND(AVG(pass_rate)*100, 1) AS pass_pct,
-      ROUND(AVG(attendance_avg)*100, 1) AS att_pct
-    FROM {VIEW_SS}
-    {where_sql}
+      ROUND(AVG(avg_gpa)::numeric,2) AS avg_gpa,
+      ROUND(AVG(pass_rate)*100,1) AS pass_pct,
+      ROUND(AVG(attendance_avg)*100,1) AS att_pct
+    FROM {VIEW_SS} {where_sql}
     """
-    kpdf = run_sql_cached(kpi_sql, params=params)
-    k = kpdf.iloc[0] if not kpdf.empty else {"students":0,"avg_gpa":0,"pass_pct":0,"att_pct":0}
+    df = run_sql_cached(kpi_sql, params=params)
+    if not df.empty:
+        k = df.iloc[0]
+        c1,c2,c3,c4=st.columns(4)
+        with c1: kpi_card("Talabalar", f"{int(k['students']):,}", "Jami studentlar")
+        with c2: kpi_card("O‘rtacha GPA", f"{k['avg_gpa']}", "Baholar")
+        with c3: kpi_card("O‘tish (%)", f"{k['pass_pct']}%", "Pass rate")
+        with c4: kpi_card("Davomat (%)", f"{k['att_pct']}%", "Attendance")
 
+<<<<<<< HEAD
     c1, c2, c3, c4 = st.columns(4)
     with c1: kpi_card("Talabalar", f"{int(k['students'] or 0):,}", "Jami talaba", kpi_color(k["students"] or 0, 1500, 800))
     with c2: kpi_card("O‘rtacha GPA", f"{k['avg_gpa'] or 0}", "Filtrlarga bog‘liq", kpi_color(k["avg_gpa"] or 0, 3.0, 2.5))
@@ -406,11 +575,54 @@ with tab3:
     """, params={**params, "lim": row_limit})
     st.dataframe(tp_all, use_container_width=True, height=420)
     download_buttons(tp_all, "o‘qituvchi_perf")
+=======
+# ==== 2) Talabalar ====
+with tab2:
+    st.subheader("Talaba natijalari")
+    ss = run_sql_cached(f"SELECT * FROM {VIEW_SS} {where_sql} ORDER BY term,faculty LIMIT :l;", {**params,"l":row_limit})
+    st.dataframe(ss, use_container_width=True)
 
-    st.markdown("### Fakultetlar bo‘yicha o‘rtacha ko‘rsatkichlar")
-    tchart = run_sql_cached(f"""
+# ==== 3) O‘qituvchilar ====
+with tab3:
+    st.subheader("O‘qituvchi ko‘rsatkichlari")
+    tp = run_sql_cached(f"SELECT * FROM {VIEW_TP} {where_sql} ORDER BY term,faculty LIMIT :l;", {**params,"l":row_limit})
+    st.dataframe(tp, use_container_width=True)
+>>>>>>> fd66768c (Auth + Admin + Rektor tab; dark UI; deps pinned)
+
+# ==== 4) Moliya ====
+with tab4:
+    st.subheader("Moliya (oylik kesim)")
+    fn = run_sql_cached(f"SELECT * FROM {VIEW_FN} {where_sql} ORDER BY month,faculty LIMIT :l;", {**params,"l":row_limit})
+    st.dataframe(fn, use_container_width=True)
+    if not fn.empty:
+        fig = px.line(fn, x="month", y="net", color="faculty", markers=True, title="Net (Revenue - Expense)")
+        st.plotly_chart(fig, use_container_width=True)
+
+# ==== 5) Admin ====
+with tab5:
+    st.subheader("Admin panel")
+    if ROLE not in ("admin","manager"):
+        st.warning("Bu bo‘lim faqat admin yoki dekan uchun.")
+    else:
+        c1,c2 = st.columns(2)
+        if c1.button("🧹 Keshni tozalash"): run_sql_cached.clear(); st.success("Kesh tozalandi!")
+        diag = run_sql_cached("SELECT current_user, current_database(), version();")
+        st.dataframe(diag, use_container_width=True)
+        mv = run_sql_cached("SELECT schemaname, matviewname FROM pg_matviews WHERE schemaname=:s", {"s":DB_SCHEMA})
+        st.dataframe(mv, use_container_width=True)
+
+# ==== 6) Rektor ====
+with tab6:
+    st.subheader("🏛️ Rektor paneli — umumiy tahlil")
+    if ROLE not in ("admin","rektor"):
+        st.warning("Bu bo‘lim faqat rektor yoki admin uchun.")
+    else:
+        col1,col2 = st.columns(2)
+        # Fakultetlar kesimida o‘rtacha ko‘rsatkich
+        fac = run_sql_cached(f"""
         SELECT faculty,
                ROUND(AVG(pass_rate)*100,1) AS pass_pct,
+<<<<<<< HEAD
                ROUND(AVG(avg_grade),2) AS avg_grade,
                ROUND(AVG(attendance)*100,1) AS att_pct
         FROM {VIEW_TP}
@@ -504,3 +716,16 @@ with tab5:
                 st.error("ETL xato! Loglarni ko‘ring.")
     else:
         st.info("ETL tugmasi o‘chirilgan. (ALLOW_ETL_CLOUD=false) — faqat lokal serverda ishlatish tavsiya qilinadi.")
+=======
+               ROUND(AVG(avg_gpa),2) AS gpa,
+               ROUND(AVG(attendance_avg)*100,1) AS att
+        FROM {VIEW_SS} GROUP BY faculty ORDER BY faculty;
+        """)
+        col1.plotly_chart(px.bar(fac, x="faculty", y="pass_pct", color="faculty", title="O‘tish foizi (%)"), use_container_width=True)
+        col2.plotly_chart(px.bar(fac, x="faculty", y="gpa", color="faculty", title="O‘rtacha GPA"), use_container_width=True)
+        st.divider()
+        st.dataframe(fac, use_container_width=True)
+        st.info("Rektor barcha fakultet ko‘rsatkichlarini solishtirishi va qaror qabul qilishi mumkin.")
+
+st.caption("© 2025 AI-Rektor • Streamlit + Neon/Postgres + Auth • Foydalanuvchi rollari: Admin, Rektor, Dekan, User")
+>>>>>>> fd66768c (Auth + Admin + Rektor tab; dark UI; deps pinned)
