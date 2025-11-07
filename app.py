@@ -1,42 +1,27 @@
-<<<<<<< HEAD
-# app.py — AI-Rektor (Streamlit Cloud uchun)
-import os
-=======
-# app.py — AI-Rektor (Auth + Admin + Rektor)
+# app.py — AI-Rektor (Auth + Admin + Rektor) — Streamlit Cloud friendly
 # -*- coding: utf-8 -*-
-
-import os, sys
->>>>>>> fd66768c (Auth + Admin + Rektor tab; dark UI; deps pinned)
+import os
 from typing import Dict, Any, Tuple
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from sqlalchemy import create_engine, text
-<<<<<<< HEAD
 
 # Auth
 import streamlit_authenticator as stauth
-
-# PDF eksport (oddiy jadval PDF)
-from io import BytesIO
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
 
 # -------------------------
 # Konfiguratsiya / Secrets
 # -------------------------
 # Streamlit Cloud: Secrets bo‘limida saqlanadi
+# (Agar secrets bo‘lmasa .env dan oladi, yanada bo‘lmasa local default)
 DB_DSN = st.secrets.get("DB_DSN", os.getenv("DB_DSN", "postgresql://postgres:7778@localhost:5432/Start_Up"))
 DB_SCHEMA = st.secrets.get("DB_SCHEMA", os.getenv("DB_SCHEMA", "ai_rektor"))
 CACHE_TTL = int(st.secrets.get("CACHE_TTL_SEC", os.getenv("CACHE_TTL_SEC", "300")))
-ALLOW_ETL = bool(st.secrets.get("ALLOW_ETL_CLOUD", False))  # Cloud’da ETL tugmasi odatda OFF
+ALLOW_ETL = bool(st.secrets.get("ALLOW_ETL_CLOUD", os.getenv("ALLOW_ETL_CLOUD", "0")))
 
-# Auth konfiguratsiya
-AUTH_CREDENTIALS = st.secrets.get("auth", {})  # secrets.toml ichidagi [auth] bo‘limi
-# Tuzilma: 
+# Auth konfiguratsiyasi (Streamlit secrets toml):
 # [auth]
 # cookie_name = "ai_rektor_auth"
 # cookie_key = "supersecret"
@@ -45,50 +30,51 @@ AUTH_CREDENTIALS = st.secrets.get("auth", {})  # secrets.toml ichidagi [auth] bo
 # name = "Admin"
 # username = "admin"
 # email = "admin@uni.uz"
-# password = "$2b$12$...."        # bcrypt hash
+# password = "$2b$12$..."     # bcrypt hash (stauth.Hasher([...]).generate())
 # role = "admin"
 # [[auth.users]]
-# name = "Dekan"
-# username = "dean"
-# email = "dean@uni.uz"
-# password = "$2b$12$...."
-# role = "dekan"
-# ...
-
-def _prepare_auth():
-    """streamlit-authenticator-ga mos shaklga o‘tkazamiz."""
-    users = AUTH_CREDENTIALS.get("users", [])
-    names = [u.get("name", u.get("username", "User")) for u in users]
-    usernames = [u.get("username") for u in users]
-    passwords = [u.get("password") for u in users]  # bu allaqachon bcrypt hash bo‘lishi kerak
-    emails = [u.get("email", "") for u in users]
-    roles = [u.get("role", "teacher") for u in users]
-
-    # authenticator config
-    creds = {"usernames": {}}
-    for i, uname in enumerate(usernames):
-        creds["usernames"][uname] = {
-            "name": names[i],
-            "email": emails[i],
-            "password": passwords[i],
-            "role": roles[i],
+# name = "Rektor"
+# username = "rektor"
+# email = "rektor@uni.uz"
+# password = "$2b$12$..."
+# role = "rektor"
+AUTH_CFG = st.secrets.get("auth", {
+    "cookie_name": "ai_rektor_auth",
+    "cookie_key": "supersecret",
+    "expiry_days": 7,
+    "users": [
+        # Minimal fallback user (demo): login admin / pass admin
+        # Cloud’da albatta secrets toml bilan haqiqiy bcrypt hash qo‘ying!
+        {
+            "name": "Admin",
+            "username": "admin",
+            "email": "admin@uni.uz",
+            "password": stauth.Hasher(["admin"]).generate()[0],
+            "role": "admin",
         }
+    ],
+})
 
-    cookie_name = AUTH_CREDENTIALS.get("cookie_name", "ai_rektor_auth")
-    cookie_key  = AUTH_CREDENTIALS.get("cookie_key",  "please_change_me")
-    expiry_days = int(AUTH_CREDENTIALS.get("expiry_days", 7))
+def _prepare_auth_config(auth_cfg: Dict[str, Any]) -> tuple[dict, dict]:
+    """streamlit-authenticator kutgan formatga aylantiramiz."""
+    users = auth_cfg.get("users", [])
+    creds = {"usernames": {}}
+    roles = {}
+    for u in users:
+        uname = u.get("username")
+        if not uname:
+            continue
+        creds["usernames"][uname] = {
+            "name": u.get("name", uname),
+            "password": u.get("password", ""),  # bcrypt hash
+            "email": u.get("email", ""),
+        }
+        roles[uname] = u.get("role", "teacher")
+    return creds, roles
 
-    authenticator = stauth.Authenticate(
-        credentials=creds,
-        cookie_name=cookie_name,
-        key=cookie_key,
-        cookie_expiry_days=expiry_days,
-    )
-    return authenticator
+CREDENTIALS, USER_ROLES = _prepare_auth_config(AUTH_CFG)
 
-# -------------------------
-# UI umumiy sozlamalar
-# -------------------------
+# UI — sahifa sozlamalari
 st.set_page_config(
     page_title="AI-Rektor Dashboard",
     page_icon="🎓",
@@ -96,41 +82,60 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Appning umumiy ranglari (light/dark ikkala rejimga mos)
-PRIMARY = "#2563eb"   # ko‘k
-SOFT_BG = "#f8fafc"
-CARD_BORDER = "#e5e7eb"
-TEXT_MUTED = "#64748b"
-TEXT_DARK = "#0f172a"
+# Kichik CSS (biroz “dark-ish” kayfiyat)
+st.markdown("""
+<style>
+:root {
+  --card-bg: #0f172a11; /* engil shaffof */
+  --card-border: #e5e7eb33;
+}
+.block-container { padding-top: 1.2rem; }
+.kpi-card { background: var(--card-bg); border:1px solid var(--card-border); border-radius:14px; padding:16px; }
+.kpi-title { font-size:12px; color:#475569; margin-bottom:6px; }
+.kpi-value { font-size:28px; font-weight:700; }
+.kpi-sub { font-size:12px; color:#64748b; }
+</style>
+""", unsafe_allow_html=True)
 
-def kpi_color(value: float, good: float, warn: float, reverse=False) -> str:
-    if value is None:
-        return "#f1f5f9"
-    v = float(value)
-    if reverse:
-        if v <= good: return "#dcfce7"
-        if v <= warn: return "#fef9c3"
-        return "#fee2e2"
-    else:
-        if v >= good: return "#dcfce7"
-        if v >= warn: return "#fef9c3"
-        return "#fee2e2"
+st.title("🎓 AI-Rektor Dashboard")
 
-def kpi_card(title: str, value_str: str, sub: str, bg: str):
-    st.markdown(
-        f"""
-        <div style="background:{bg};padding:16px;border-radius:14px;border:1px solid {CARD_BORDER}">
-            <div style="font-size:12px;color:{TEXT_MUTED};margin-bottom:6px">{title}</div>
-            <div style="font-size:28px;font-weight:700;color:{TEXT_DARK}">{value_str}</div>
-            <div style="font-size:12px;color:{TEXT_MUTED}">{sub}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+# --------------------------
+# Auth — login / logout
+# --------------------------
+authenticator = stauth.Authenticate(
+    CREDENTIALS,
+    AUTH_CFG.get("cookie_name", "ai_rektor_auth"),
+    AUTH_CFG.get("cookie_key", "supersecret"),
+    AUTH_CFG.get("expiry_days", 7),
+)
 
-# -------------------------
-# DB ulanish (cached)
-# -------------------------
+# Headerda login form
+if "authentication_status" not in st.session_state:
+    st.session_state.authentication_status = None
+
+col_login_l, col_login_r = st.columns([3, 1])
+with col_login_r:
+    name, auth_status, uname = authenticator.login("Kirish", "main")
+    st.session_state.authentication_status = auth_status
+
+if st.session_state.authentication_status is False:
+    st.error("Login yoki parol xato.")
+    st.stop()
+elif st.session_state.authentication_status is None:
+    st.info("Iltimos, tizimga kiring.")
+    st.stop()
+
+# Auth OK — foydalanuvchi va roli
+current_user = uname
+current_role = USER_ROLES.get(uname, "teacher")
+
+with st.sidebar:
+    st.markdown(f"**👤 Foydalanuvchi:** {name}  \n**Rol:** `{current_role}`")
+    authenticator.logout("Chiqish", "sidebar")
+
+# --------------------------
+# Connection (pooled, cached)
+# --------------------------
 @st.cache_resource(show_spinner=False)
 def get_engine():
     return create_engine(
@@ -144,14 +149,44 @@ def get_engine():
 
 engine = get_engine()
 
-# -------------------------
-# SQL helperlar (cached)
-# -------------------------
+# Mat. viewlar mavjudmi? avtomatik aniqlash
+@st.cache_data(ttl=600, show_spinner=False)
+def detect_views() -> Dict[str, str]:
+    """MV bo‘lsa mv_* ni, bo‘lmasa vw_* ni ishlatish."""
+    mapping = {"ss": "vw_student_success", "tp": "vw_teacher_perf", "fn": "vw_fin_summary"}
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql(f"SET search_path TO {DB_SCHEMA}, public;")
+            q = text("SELECT matviewname FROM pg_matviews WHERE schemaname = :s")
+            mv = pd.read_sql(q, conn, params={"s": DB_SCHEMA})
+        mnames = mv["matviewname"].tolist() if not mv.empty else []
+        if "mv_student_success" in mnames:
+            mapping["ss"] = "mv_student_success"
+        if "mv_teacher_perf" in mnames:
+            mapping["tp"] = "mv_teacher_perf"
+        if "mv_fin_summary" in mnames:
+            mapping["fn"] = "mv_fin_summary"
+    except Exception:
+        pass
+    return mapping
+
+VIEW_MAP = detect_views()
+VIEW_SS = VIEW_MAP["ss"]
+VIEW_TP = VIEW_MAP["tp"]
+VIEW_FN = VIEW_MAP["fn"]
+
+# --------------------------
+# SQL helpers
+# --------------------------
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def run_sql_cached(sql: str, params: Dict[str, Any] | None = None) -> pd.DataFrame:
-    with engine.connect() as conn:
-        conn.exec_driver_sql(f"SET search_path TO {DB_SCHEMA}, public;")
-        return pd.read_sql(text(sql), conn, params=params)
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql(f"SET search_path TO {DB_SCHEMA}, public;")
+            return pd.read_sql(text(sql), conn, params=params)
+    except Exception as e:
+        st.error(f"❌ DB ulanishda xato: {e}")
+        return pd.DataFrame()
 
 def run_sql(sql: str, params: Dict[str, Any] | None = None) -> pd.DataFrame:
     with engine.connect() as conn:
@@ -160,132 +195,39 @@ def run_sql(sql: str, params: Dict[str, Any] | None = None) -> pd.DataFrame:
 
 def invalidate_cache():
     run_sql_cached.clear()
+    detect_views.clear()
 
 def download_buttons(df: pd.DataFrame, base_name: str):
-    c1, c2, c3 = st.columns(3)
-    # CSV
     ccsv = df.to_csv(index=False).encode("utf-8")
-    c1.download_button("⬇️ CSV", ccsv, f"{base_name}.csv", "text/csv", use_container_width=True)
-    # Excel (openpyxl/XlsxWriter orqali)
-    xlsx_bytes = BytesIO()
-    with pd.ExcelWriter(xlsx_bytes, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="data", index=False)
-    c2.download_button("⬇️ Excel", xlsx_bytes.getvalue(), f"{base_name}.xlsx",
-                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                       use_container_width=True)
-    # PDF (reportlab bilan oddiy jadval)
-    pdf_bytes = df_to_pdf_bytes(df, title=base_name)
-    c3.download_button("⬇️ PDF", pdf_bytes, f"{base_name}.pdf", "application/pdf", use_container_width=True)
-
-def df_to_pdf_bytes(df: pd.DataFrame, title: str = "Hisobot") -> bytes:
-    buff = BytesIO()
-    doc = SimpleDocTemplate(buff, pagesize=landscape(A4), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24)
-    styles = getSampleStyleSheet()
-    elems = []
-    elems.append(Paragraph(title, styles["Title"]))
-    elems.append(Spacer(1, 12))
-    # Jadval
-    data = [df.columns.tolist()] + df.astype(str).values.tolist()
-    table = Table(data, repeatRows=1)
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#e2e8f0")),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.HexColor("#0f172a")),
-        ("ALIGN", (0,0), (-1,-1), "CENTER"),
-        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-        ("FONTSIZE", (0,0), (-1,0), 9),
-        ("FONTSIZE", (0,1), (-1,-1), 8),
-        ("BOTTOMPADDING", (0,0), (-1,0), 8),
-        ("GRID", (0,0), (-1,-1), 0.25, colors.HexColor("#cbd5e1")),
-    ]))
-    elems.append(table)
-    doc.build(elems)
-    return buff.getvalue()
-
-# -------------------------
-# AUTH — login / logout
-# -------------------------
-authenticator = _prepare_auth()
-if "authentication_status" not in st.session_state:
-    st.session_state.authentication_status = None
-
-with st.sidebar:
-    st.image("https://img.icons8.com/external-flaticons-lineal-color-flat-icons/64/000000/external-university-college-major-flaticons-lineal-color-flat-icons.png", width=48)
-    st.markdown("### 🎓 AI-Rektor")
-    name, auth_status, username = authenticator.login("Kirish", "sidebar")
-    if auth_status is False:
-        st.error("Login yoki parol xato.")
-    elif auth_status is None:
-        st.info("Login va parolni kiriting.")
-    else:
-        st.success(f"Xush kelibsiz, **{name}**!")
-        authenticator.logout("Chiqish", "sidebar")
-
-# Rolni aniqlash
-def current_role() -> str:
+    st.download_button("⬇️ CSV", ccsv, f"{base_name}.csv", "text/csv", use_container_width=True)
     try:
-        if st.session_state.get("authentication_status"):
-            u = authenticator._credentials["usernames"].get(username, {})
-            return u.get("role", "teacher")
-    except Exception:
-        pass
-    return "guest"
+        xlsx_path = f"{base_name}.xlsx"
+        with pd.ExcelWriter(xlsx_path) as writer:
+            df.to_excel(writer, sheet_name="data", index=False)
+        with open(xlsx_path, "rb") as f:
+            st.download_button("⬇️ Excel", f, f"{base_name}.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True)
+    finally:
+        try: os.remove(xlsx_path)
+        except Exception: pass
 
-role = current_role()
-if st.session_state.get("authentication_status") is not True:
-    st.stop()
-
-# -------------------------
-# Constants: MV yoki VIEW
-# -------------------------
-USE_MV = True  # MV mavjud bo‘lsa tezroq
-VIEW_SS = "mv_student_success" if USE_MV else "vw_student_success"
-VIEW_TP = "mv_teacher_perf"   if USE_MV else "vw_teacher_perf"
-VIEW_FN = "mv_fin_summary"    if USE_MV else "vw_fin_summary"
-
-# -------------------------
-# Sarlavha va xabarnoma
-# -------------------------
-st.markdown(
-    f"""
-    <div style="background:{SOFT_BG};padding:16px 20px;border-radius:14px;border:1px solid {CARD_BORDER};margin-bottom:12px">
-        <div style="display:flex;align-items:center;gap:10px;">
-            <span style="font-size:28px">🎓</span>
-            <div>
-                <div style="font-size:22px;font-weight:700;color:{TEXT_DARK}">AI-Rektor — boshqaruv paneli</div>
-                <div style="color:{TEXT_MUTED};font-size:13px">
-                    Ma’lumotlar bazasi: <b>{DB_SCHEMA}</b> • Cache TTL: <b>{CACHE_TTL}s</b> • Manba: <b>{'MV' if USE_MV else 'VIEW'}</b> • Rol: <b>{role}</b>
-                </div>
-            </div>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-# -------------------------
-# Sidebar — filtrlar
-# -------------------------
+# --------------------------
+# Sidebar — filtrlash
+# --------------------------
 st.sidebar.header("⚙️ Filtrlar")
-try:
-    terms_df = run_sql_cached(f"SELECT DISTINCT term FROM {VIEW_SS} ORDER BY term;")
-except Exception:
-    # Agar MV hali yo‘q bo‘lsa VIEWga qaytamiz
-    VIEW_SS = "vw_student_success"
-    VIEW_TP = "vw_teacher_perf"
-    VIEW_FN = "vw_fin_summary"
-    terms_df = run_sql_cached(f"SELECT DISTINCT term FROM {VIEW_SS} ORDER BY term;")
-
-term = st.sidebar.selectbox("Term", ["Barchasi"] + terms_df["term"].tolist(), index=0)
+terms_df = run_sql_cached(f"SELECT DISTINCT term FROM {VIEW_SS} ORDER BY term;")
+term = st.sidebar.selectbox("Term", ["Barchasi"] + (terms_df["term"].tolist() if not terms_df.empty else []), index=0)
 
 if term != "Barchasi":
     facs_df = run_sql_cached(f"SELECT DISTINCT faculty FROM {VIEW_SS} WHERE term=:t ORDER BY faculty;", {"t": term})
 else:
     facs_df = run_sql_cached(f"SELECT DISTINCT faculty FROM {VIEW_SS} ORDER BY faculty;")
 
-faculty = st.sidebar.selectbox("Fakultet", ["Barchasi"] + facs_df["faculty"].tolist(), index=0)
+faculty = st.sidebar.selectbox("Fakultet", ["Barchasi"] + (facs_df["faculty"].tolist() if not facs_df.empty else []), index=0)
 row_limit = st.sidebar.slider("Jadval limiti", 50, 3000, 300, 50)
-risk_att = st.sidebar.slider("Risk — Davomat (%)", 50, 90, 75, 1)
-risk_grd = st.sidebar.slider("Risk — O‘rtacha baho", 40, 100, 60, 1)
+risk_att = st.sidebar.slider("Risk chegarasi — Davomat %", 50, 90, 75, 1)
+risk_grd = st.sidebar.slider("Risk chegarasi — O‘rtacha baho", 40, 100, 60, 1)
 
 if st.sidebar.button("🔄 Keshni tozalash"):
     invalidate_cache()
@@ -298,194 +240,69 @@ def where_clause(term: str, faculty: str) -> Tuple[str, Dict[str, Any]]:
     if faculty != "Barchasi":
         w.append("faculty = :faculty"); p["faculty"] = faculty
     return ("WHERE " + " AND ".join(w)) if w else "", p
-=======
-from dotenv import load_dotenv
-import streamlit_authenticator as stauth
 
-# --------------------------
-# YUKLASHLAR
-# --------------------------
-load_dotenv()
-DB_DSN    = os.getenv("DB_DSN", "postgresql://postgres:7778@localhost:5432/Start_Up")
-DB_SCHEMA = os.getenv("DB_SCHEMA", "ai_rektor")
-CACHE_TTL = int(os.getenv("CACHE_TTL_SEC", "300"))
-AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() in ("1", "true", "yes")
-
-# Foydalanuvchi va rollar
-APP_USERS = os.getenv("APP_USERS", "admin:Admin@2025;rektor:Rektor@2025;dekan:Dekan@2025")
-APP_ROLES = os.getenv("APP_ROLES", "admin:admin;rektor:rektor;dekan:manager")
-APP_COOKIE_NAME = os.getenv("APP_COOKIE_NAME", "ai_rektor_auth")
-APP_COOKIE_KEY  = os.getenv("APP_COOKIE_KEY", "super_secret_cookie")
-APP_COOKIE_DAYS = int(os.getenv("APP_COOKIE_DAYS", "7"))
-
-# --------------------------
-# Streamlit UI sozlamalari
-# --------------------------
-st.set_page_config(
-    page_title="🎓 AI-Rektor Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-st.markdown("""
-<style>
-body {background-color: #0b1220;}
-h1,h2,h3,h4,h5,h6 {color:#e5e7eb;}
-.stApp {background: radial-gradient(1400px 600px at 20% -10%, #0b1220 0, #020617 100%);}
-.metric-card {
-  background: linear-gradient(180deg, #0f172a 0%, #0b1220 100%);
-  border-radius: 14px; padding: 16px; border: 1px solid #1f2937;
-}
-.metric-title {font-size:12px;color:#94a3b8;}
-.metric-value {font-size:28px;font-weight:700;color:#f1f5f9;}
-.metric-sub {font-size:12px;color:#a1a1aa;}
-</style>
-""", unsafe_allow_html=True)
-
-st.title("🎓 AI-Rektor Dashboard")
-
-# --------------------------
-# DATABASE CONNECTION
-# --------------------------
-@st.cache_resource(show_spinner=False)
-def get_engine():
-    return create_engine(DB_DSN, pool_size=5, max_overflow=5, pool_pre_ping=True, future=True)
-engine = get_engine()
-
-@st.cache_data(ttl=600)
-def detect_views(schema: str) -> Dict[str, str]:
-    try:
-        with engine.connect() as conn:
-            conn.exec_driver_sql(f"SET search_path TO {schema}, public;")
-            mv = pd.read_sql(text("SELECT matviewname FROM pg_matviews WHERE schemaname=:s"), conn, params={"s": schema})
-            mvs = set(mv["matviewname"].tolist()) if not mv.empty else set()
-            return {
-                "ss": "mv_student_success" if "mv_student_success" in mvs else "vw_student_success",
-                "tp": "mv_teacher_perf" if "mv_teacher_perf" in mvs else "vw_teacher_perf",
-                "fn": "mv_fin_summary" if "mv_fin_summary" in mvs else "vw_fin_summary"
-            }
-    except Exception:
-        return {"ss": "vw_student_success", "tp": "vw_teacher_perf", "fn": "vw_fin_summary"}
-
-NAMES = detect_views(DB_SCHEMA)
-VIEW_SS, VIEW_TP, VIEW_FN = NAMES["ss"], NAMES["tp"], NAMES["fn"]
-
-@st.cache_data(ttl=CACHE_TTL)
-def run_sql_cached(sql, params=None):
-    with engine.connect() as conn:
-        conn.exec_driver_sql(f"SET search_path TO {DB_SCHEMA}, public;")
-        return pd.read_sql(text(sql), conn, params=params)
-
-# --------------------------
-# AUTHENTICATION
-# --------------------------
-def parse_env_map(env: str) -> Dict[str, str]:
-    res = {}
-    for pair in env.split(";"):
-        if ":" in pair:
-            k,v = pair.split(":",1)
-            res[k.strip()] = v.strip()
-    return res
-
-USERS = parse_env_map(APP_USERS)
-ROLES = parse_env_map(APP_ROLES)
-cfg = {"credentials":{"usernames":{}}, "cookies":{"name":APP_COOKIE_NAME,"key":APP_COOKIE_KEY,"expiry_days":APP_COOKIE_DAYS}}
-for u,p in USERS.items():
-    cfg["credentials"]["usernames"][u] = {"name":u.capitalize(),"password":stauth.Hasher([p]).generate()[0],"email":f"{u}@example.com"}
-
-authenticator = stauth.Authenticate(cfg["credentials"], APP_COOKIE_NAME, APP_COOKIE_KEY, APP_COOKIE_DAYS)
-
-if AUTH_ENABLED:
-    name, auth_status, username = authenticator.login("🔐 Tizimga kirish", "main")
-    if not auth_status:
-        if auth_status is False: st.error("Login yoki parol noto‘g‘ri.")
-        elif auth_status is None: st.info("Iltimos, tizimga kiring.")
-        st.stop()
-    authenticator.logout("Chiqish", "sidebar")
-    st.sidebar.success(f"👋 Salom, {name}!")
-else:
-    username, name = "admin", "Admin"
-
-ROLE = ROLES.get(username, "user")
-
-# --------------------------
-# Filtrlar
-# --------------------------
-st.sidebar.header("⚙️ Filtrlar")
-try:
-    terms = run_sql_cached(f"SELECT DISTINCT term FROM {VIEW_SS} ORDER BY term;")["term"].tolist()
-except:
-    terms = []
-term = st.sidebar.selectbox("Term", ["Barchasi"] + terms)
-try:
-    facs = run_sql_cached(f"SELECT DISTINCT faculty FROM {VIEW_SS} ORDER BY faculty;")["faculty"].tolist()
-except:
-    facs = []
-faculty = st.sidebar.selectbox("Fakultet", ["Barchasi"] + facs)
-row_limit = st.sidebar.slider("Jadval limiti", 50, 3000, 300, 50)
->>>>>>> fd66768c (Auth + Admin + Rektor tab; dark UI; deps pinned)
-
-def where_clause(term, faculty):
-    w,p=[],{}
-    if term!="Barchasi": w.append("term=:term"); p["term"]=term
-    if faculty!="Barchasi": w.append("faculty=:faculty"); p["faculty"]=faculty
-    return ("WHERE "+ " AND ".join(w)) if w else "", p
 where_sql, params = where_clause(term, faculty)
+st.caption(f"Schema: `{DB_SCHEMA}` • Cache TTL: {CACHE_TTL}s • Manba: `{VIEW_SS}/{VIEW_TP}/{VIEW_FN}`")
 
-<<<<<<< HEAD
-# -------------------------
-# Tabs
-# -------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Umumiy", "🎓 Talabalar", "👩‍🏫 O‘qituvchilar", "💼 Moliya", "🛠️ Admin"])
+# --------------------------
+# KPI cards (rangli)
+# --------------------------
+def kpi_color(value: float, good: float, warn: float, reverse=False) -> str:
+    # reverse=False: katta -> yaxshi. True: kichik -> yaxshi
+    if value is None: return "#f1f5f9"
+    v = value
+    if reverse:
+        if v <= good: return "#dcfce7"
+        if v <= warn: return "#fef9c3"
+        return "#fee2e2"
+    else:
+        if v >= good: return "#dcfce7"
+        if v >= warn: return "#fef9c3"
+        return "#fee2e2"
 
-# ===== Umumiy =====
+def kpi_card(title: str, value_str: str, sub: str, bg: str):
+    st.markdown(
+        f"""
+        <div class="kpi-card" style="background:{bg};">
+            <div class="kpi-title">{title}</div>
+            <div class="kpi-value">{value_str}</div>
+            <div class="kpi-sub">{sub}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# --------------------------
+# Tabs — Admin oldin, Rektor keyin (talab bo‘yicha)
+# --------------------------
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["📊 Overview", "🎓 Students", "👩‍🏫 Teachers", "💼 Finance", "🛠️ Admin", "🏛️ Rektor"]
+)
+
+# ===== Overview =====
 with tab1:
-=======
-# --------------------------
-# KPI yordamchi
-# --------------------------
-def kpi_card(title, value, sub):
-    st.markdown(f"""
-    <div class="metric-card">
-      <div class="metric-title">{title}</div>
-      <div class="metric-value">{value}</div>
-      <div class="metric-sub">{sub}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# --------------------------
-# TABS: 6 ta
-# --------------------------
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📊 Umumiy", "🎓 Talabalar", "👩‍🏫 O‘qituvchilar", "💼 Moliya", "🛠️ Admin", "🏛️ Rektor"
-])
-
-# ==== 1) Umumiy ====
-with tab1:
-    st.subheader("Umumiy ko‘rsatkichlar")
->>>>>>> fd66768c (Auth + Admin + Rektor tab; dark UI; deps pinned)
     kpi_sql = f"""
     SELECT
       SUM(students)::bigint AS students,
-      ROUND(AVG(avg_gpa)::numeric,2) AS avg_gpa,
-      ROUND(AVG(pass_rate)*100,1) AS pass_pct,
-      ROUND(AVG(attendance_avg)*100,1) AS att_pct
-    FROM {VIEW_SS} {where_sql}
+      ROUND(AVG(avg_gpa)::numeric, 2) AS avg_gpa,
+      ROUND(AVG(pass_rate)*100, 1) AS pass_pct,
+      ROUND(AVG(attendance_avg)*100, 1) AS att_pct
+    FROM {VIEW_SS}
+    {where_sql}
     """
-    df = run_sql_cached(kpi_sql, params=params)
-    if not df.empty:
-        k = df.iloc[0]
-        c1,c2,c3,c4=st.columns(4)
-        with c1: kpi_card("Talabalar", f"{int(k['students']):,}", "Jami studentlar")
-        with c2: kpi_card("O‘rtacha GPA", f"{k['avg_gpa']}", "Baholar")
-        with c3: kpi_card("O‘tish (%)", f"{k['pass_pct']}%", "Pass rate")
-        with c4: kpi_card("Davomat (%)", f"{k['att_pct']}%", "Attendance")
+    kpdf = run_sql_cached(kpi_sql, params=params)
+    k = kpdf.iloc[0] if not kpdf.empty else {"students":0,"avg_gpa":0,"pass_pct":0,"att_pct":0}
 
-<<<<<<< HEAD
     c1, c2, c3, c4 = st.columns(4)
-    with c1: kpi_card("Talabalar", f"{int(k['students'] or 0):,}", "Jami talaba", kpi_color(k["students"] or 0, 1500, 800))
-    with c2: kpi_card("O‘rtacha GPA", f"{k['avg_gpa'] or 0}", "Filtrlarga bog‘liq", kpi_color(k["avg_gpa"] or 0, 3.0, 2.5))
-    with c3: kpi_card("O‘tish ko‘rsatkichi", f"{k['pass_pct'] or 0}%", "AVG pass_rate", kpi_color(k["pass_pct"] or 0, 85, 70))
-    with c4: kpi_card("Davomat", f"{k['att_pct'] or 0}%", "AVG attendance", kpi_color(k["att_pct"] or 0, 85, 75))
+    bg1 = kpi_color(float(k["students"] or 0), good=1500, warn=800)
+    bg2 = kpi_color(float(k["avg_gpa"] or 0), good=3.0, warn=2.5)
+    bg3 = kpi_color(float(k["pass_pct"] or 0), good=85, warn=70)
+    bg4 = kpi_color(float(k["att_pct"] or 0), good=85, warn=75)
+
+    with c1: kpi_card("Talabalar", f"{int(k['students'] or 0):,}", "Jami studentlar", bg1)
+    with c2: kpi_card("O‘rtacha GPA", f"{k['avg_gpa'] or 0}", "Term/Fakultet filtrlariga bog‘liq", bg2)
+    with c3: kpi_card("O‘tish ko‘rsatkichi", f"{k['pass_pct'] or 0}%", "AVG pass_rate", bg3)
+    with c4: kpi_card("Davomat", f"{k['att_pct'] or 0}%", "AVG attendance", bg4)
 
     st.divider()
     colA, colB = st.columns(2)
@@ -498,7 +315,7 @@ with tab1:
         ORDER BY term, faculty
     """, params=params)
     fig = px.bar(prs, x="faculty", y="pass_pct", color="term",
-                 title="O‘tish ko‘rsatkichi (%) — term × fakultet", barmode="group")
+                 title="Pass rate (%) — term × fakultet", barmode="group")
     colA.plotly_chart(fig, use_container_width=True)
 
     att = run_sql_cached(f"""
@@ -521,9 +338,9 @@ with tab1:
         LIMIT 20
     """, params=params)
     st.dataframe(tp, use_container_width=True, height=360)
-    download_buttons(tp, "top_o‘qituvchilar")
+    download_buttons(tp, "top_teachers")
 
-# ===== Talabalar =====
+# ===== Students =====
 with tab2:
     st.subheader("Talaba natijalari (kesimlar)")
     ss = run_sql_cached(f"""
@@ -537,7 +354,7 @@ with tab2:
         LIMIT :lim
     """, params={**params, "lim": row_limit})
     st.dataframe(ss, use_container_width=True, height=420)
-    download_buttons(ss, "talabalar_kesim")
+    download_buttons(ss, "students_view")
 
     st.divider()
     st.subheader("⚠️ Riskli talabalar")
@@ -557,9 +374,9 @@ with tab2:
         LIMIT :lim
     """, params={**params, "lim": row_limit, "att_thr": risk_att, "grd_thr": risk_grd})
     st.dataframe(risk, use_container_width=True, height=380)
-    download_buttons(risk, "riskli_talabalar")
+    download_buttons(risk, "risk_students")
 
-# ===== O‘qituvchilar =====
+# ===== Teachers =====
 with tab3:
     st.subheader("O‘qituvchi performansi")
     tp_all = run_sql_cached(f"""
@@ -574,55 +391,12 @@ with tab3:
         LIMIT :lim
     """, params={**params, "lim": row_limit})
     st.dataframe(tp_all, use_container_width=True, height=420)
-    download_buttons(tp_all, "o‘qituvchi_perf")
-=======
-# ==== 2) Talabalar ====
-with tab2:
-    st.subheader("Talaba natijalari")
-    ss = run_sql_cached(f"SELECT * FROM {VIEW_SS} {where_sql} ORDER BY term,faculty LIMIT :l;", {**params,"l":row_limit})
-    st.dataframe(ss, use_container_width=True)
+    download_buttons(tp_all, "teachers_perf")
 
-# ==== 3) O‘qituvchilar ====
-with tab3:
-    st.subheader("O‘qituvchi ko‘rsatkichlari")
-    tp = run_sql_cached(f"SELECT * FROM {VIEW_TP} {where_sql} ORDER BY term,faculty LIMIT :l;", {**params,"l":row_limit})
-    st.dataframe(tp, use_container_width=True)
->>>>>>> fd66768c (Auth + Admin + Rektor tab; dark UI; deps pinned)
-
-# ==== 4) Moliya ====
-with tab4:
-    st.subheader("Moliya (oylik kesim)")
-    fn = run_sql_cached(f"SELECT * FROM {VIEW_FN} {where_sql} ORDER BY month,faculty LIMIT :l;", {**params,"l":row_limit})
-    st.dataframe(fn, use_container_width=True)
-    if not fn.empty:
-        fig = px.line(fn, x="month", y="net", color="faculty", markers=True, title="Net (Revenue - Expense)")
-        st.plotly_chart(fig, use_container_width=True)
-
-# ==== 5) Admin ====
-with tab5:
-    st.subheader("Admin panel")
-    if ROLE not in ("admin","manager"):
-        st.warning("Bu bo‘lim faqat admin yoki dekan uchun.")
-    else:
-        c1,c2 = st.columns(2)
-        if c1.button("🧹 Keshni tozalash"): run_sql_cached.clear(); st.success("Kesh tozalandi!")
-        diag = run_sql_cached("SELECT current_user, current_database(), version();")
-        st.dataframe(diag, use_container_width=True)
-        mv = run_sql_cached("SELECT schemaname, matviewname FROM pg_matviews WHERE schemaname=:s", {"s":DB_SCHEMA})
-        st.dataframe(mv, use_container_width=True)
-
-# ==== 6) Rektor ====
-with tab6:
-    st.subheader("🏛️ Rektor paneli — umumiy tahlil")
-    if ROLE not in ("admin","rektor"):
-        st.warning("Bu bo‘lim faqat rektor yoki admin uchun.")
-    else:
-        col1,col2 = st.columns(2)
-        # Fakultetlar kesimida o‘rtacha ko‘rsatkich
-        fac = run_sql_cached(f"""
+    st.markdown("### Fakultetlar bo‘yicha o‘rtacha ko‘rsatkichlar")
+    tchart = run_sql_cached(f"""
         SELECT faculty,
                ROUND(AVG(pass_rate)*100,1) AS pass_pct,
-<<<<<<< HEAD
                ROUND(AVG(avg_grade),2) AS avg_grade,
                ROUND(AVG(attendance)*100,1) AS att_pct
         FROM {VIEW_TP}
@@ -632,14 +406,14 @@ with tab6:
     """, params=params)
     c1, c2 = st.columns(2)
     c1.plotly_chart(px.bar(tchart, x="faculty", y="pass_pct",
-                           title="O‘tish ko‘rsatkichi (%) — o‘rtacha, fakultet bo‘yicha"),
+                           title="Pass rate (%) — o‘rtacha, fakultet bo‘yicha"),
                     use_container_width=True)
     c2.plotly_chart(px.bar(tchart, x="faculty", y="avg_grade",
                            title="O‘rtacha baho — fakultet bo‘yicha"),
                     use_container_width=True)
 
     st.divider()
-    st.markdown("### 👆 O‘qituvchi bo‘yicha drilldown")
+    st.markdown("### 👆 O‘qituvchi drilldown")
     colt1, colt2 = st.columns([2,1])
     tnames = run_sql_cached(f"SELECT DISTINCT teacher_name FROM {VIEW_TP} ORDER BY teacher_name;")
     t_sel = colt1.selectbox("O‘qituvchi", tnames["teacher_name"].tolist() if not tnames.empty else [])
@@ -660,9 +434,9 @@ with tab6:
             ORDER BY e.term, e.course_id
         """, params={**params, "tn": t_sel})
         st.dataframe(det, use_container_width=True, height=380)
-        download_buttons(det, f"o‘qituvchi_det_{t_sel.replace(' ','_')}")
+        download_buttons(det, f"teacher_detail_{t_sel.replace(' ','_')}")
 
-# ===== Moliya =====
+# ===== Finance =====
 with tab4:
     st.subheader("Moliya (oyma-oy)")
     fin = run_sql_cached(f"""
@@ -672,60 +446,84 @@ with tab4:
         ORDER BY month, faculty
     """, params=({"faculty": faculty} if faculty!="Barchasi" else None))
     st.dataframe(fin, use_container_width=True, height=420)
-    fig = px.line(fin, x="month", y="net", color="faculty", markers=True, title="Net (Revenue - Expense)")
-    st.plotly_chart(fig, use_container_width=True)
-    download_buttons(fin, "moliya_oymaoy")
+    if not fin.empty:
+        fig = px.line(fin, x="month", y="net", color="faculty", markers=True, title="Net (Revenue - Expense)")
+        st.plotly_chart(fig, use_container_width=True)
+    download_buttons(fin, "finance_monthly")
 
-# ===== Admin (faqat admin & dekan) =====
+# ===== Admin =====  (faqat admin roliga ko‘rinadi)
 with tab5:
-    if role not in ("admin", "dekan"):
-        st.warning("Bu bo‘lim faqat admin/dekan uchun.")
-        st.stop()
-
-    st.subheader("Admin / ETL / Kesh")
-    cA, cB, cC = st.columns([1,1,2])
-    if cA.button("🧹 Keshni tozalash", use_container_width=True):
-        invalidate_cache()
-        st.success("Kesh tozalandi.")
-
-    st.caption("Cloud-da ETL ishga tushirish odatda o‘chirib qo‘yiladi. Kerak bo‘lsa ALLOW_ETL_CLOUD = true.")
-    if ALLOW_ETL:
-        st.info("ETL tugmasi yoqilgan. `main.py` ichida Neon DSN bilan ishlaydi.")
-        import subprocess, sys
-        etl_path = cB.text_input("ETL (main.py) yo‘li", value="main.py")
-        data_dir = cC.text_input("Data papka", value="./data")
-        dsn_ui = st.text_input("DSN (.secrets DB_DSN bo‘sh bo‘lsa)", value=DB_DSN)
-        run_cols = st.columns([1,1,1,2])
-        run_once = run_cols[0].button("🔄 Run ETL (once)", use_container_width=True)
-        refresh_mv = run_cols[1].checkbox("MV refresh", value=True)
-        show_cmd = run_cols[2].checkbox("Buyruqni ko‘rsat", value=False)
-
-        if run_once:
-            cmd = [sys.executable, etl_path, "--dsn", dsn_ui, "--data-dir", data_dir, "--once", "--log-level", "INFO"]
-            if refresh_mv: cmd.append("--refresh-mv")
-            if show_cmd: st.code(" ".join(cmd))
-            with st.spinner("ETL ishga tushmoqda..."):
-                cp = subprocess.run(cmd, capture_output=True, text=True)
-            st.write("Return code:", cp.returncode)
-            st.text_area("STDOUT", cp.stdout, height=180)
-            st.text_area("STDERR", cp.stderr, height=180)
-            if cp.returncode == 0:
-                st.success("ETL OK — kesh tozalanmoqda…")
-                invalidate_cache()
-            else:
-                st.error("ETL xato! Loglarni ko‘ring.")
+    if current_role != "admin":
+        st.info("Bu bo‘lim faqat adminlar uchun.")
     else:
-        st.info("ETL tugmasi o‘chirilgan. (ALLOW_ETL_CLOUD=false) — faqat lokal serverda ishlatish tavsiya qilinadi.")
-=======
-               ROUND(AVG(avg_gpa),2) AS gpa,
-               ROUND(AVG(attendance_avg)*100,1) AS att
-        FROM {VIEW_SS} GROUP BY faculty ORDER BY faculty;
-        """)
-        col1.plotly_chart(px.bar(fac, x="faculty", y="pass_pct", color="faculty", title="O‘tish foizi (%)"), use_container_width=True)
-        col2.plotly_chart(px.bar(fac, x="faculty", y="gpa", color="faculty", title="O‘rtacha GPA"), use_container_width=True)
-        st.divider()
-        st.dataframe(fac, use_container_width=True)
-        st.info("Rektor barcha fakultet ko‘rsatkichlarini solishtirishi va qaror qabul qilishi mumkin.")
+        st.subheader("🛠️ Admin paneli")
+        cA, cB, cC = st.columns([1,1,2])
+        if cA.button("🧹 Keshni tozalash", use_container_width=True):
+            invalidate_cache()
+            st.success("Kesh tozalandi.")
+        st.caption("Eslatma: Cloudda ETL ishga tushirish odatda tavsiya qilinmaydi (fayl ruxsatlari, vaqt limiti).")
 
-st.caption("© 2025 AI-Rektor • Streamlit + Neon/Postgres + Auth • Foydalanuvchi rollari: Admin, Rektor, Dekan, User")
->>>>>>> fd66768c (Auth + Admin + Rektor tab; dark UI; deps pinned)
+        if ALLOW_ETL:
+            st.warning("ALLOW_ETL_CLOUD=1 bo‘lgani uchun (tajribaviy) ETL tugmalari paydo bo‘ladi.")
+            import sys, subprocess
+            etl_path = st.text_input("ETL (main.py) yo‘li", value="main.py")
+            data_dir = st.text_input("Data papka", value="./data")
+            dsn_ui = st.text_input("DSN (.env/DB_DSN bo‘sh bo‘lsa ishlatiladi)", value=DB_DSN)
+            run_cols = st.columns([1,1,1,2])
+            run_once = run_cols[0].button("🔄 Run ETL (once)", use_container_width=True)
+            run_refresh_mv = run_cols[1].checkbox("MV refresh", value=True)
+            show_cmd = run_cols[2].checkbox("Buyruqni ko‘rsat", value=False)
+
+            if run_once:
+                cmd = [sys.executable, etl_path, "--dsn", dsn_ui, "--data-dir", data_dir, "--once", "--log-level", "INFO"]
+                if run_refresh_mv: cmd.append("--refresh-mv")
+                if show_cmd: st.code(" ".join(cmd))
+                with st.spinner("ETL ishga tushmoqda..."):
+                    cp = subprocess.run(cmd, capture_output=True, text=True)
+                st.write("Return code:", cp.returncode)
+                st.text_area("STDOUT", cp.stdout, height=180)
+                st.text_area("STDERR", cp.stderr, height=180)
+                if cp.returncode == 0:
+                    st.success("ETL OK — kesh tozalanmoqda…")
+                    invalidate_cache()
+                else:
+                    st.error("ETL xato! Loglarni ko‘ring.")
+        else:
+            st.info("Cloud muhiti: ETL tugmasi o‘chirib qo‘yilgan. Lokal ishga tushiring.")
+
+# ===== Rektor ===== (rektor va admin ko‘radi)
+with tab6:
+    if current_role not in ("rektor", "admin"):
+        st.info("Bu bo‘lim faqat rektor (va admin) uchun.")
+    else:
+        st.subheader("🏛️ Rektor ko‘rinishi — Topline metrikalar")
+        topline = run_sql_cached(f"""
+            WITH ss AS (
+              SELECT faculty,
+                     ROUND(AVG(avg_gpa)::numeric,2) AS avg_gpa,
+                     ROUND(AVG(pass_rate)*100,1) AS pass_pct,
+                     ROUND(AVG(attendance_avg)*100,1) AS att_pct,
+                     SUM(students)::bigint AS students
+              FROM {VIEW_SS}
+              {where_sql}
+              GROUP BY faculty
+            ),
+            fin AS (
+              SELECT faculty,
+                     SUM(net) AS net_sum
+              FROM {VIEW_FN}
+              GROUP BY faculty
+            )
+            SELECT ss.faculty, ss.students, ss.avg_gpa, ss.pass_pct, ss.att_pct, COALESCE(fin.net_sum,0) AS net
+            FROM ss
+            LEFT JOIN fin USING(faculty)
+            ORDER BY ss.faculty;
+        """, params=params)
+        st.dataframe(topline, use_container_width=True, height=420)
+        if not topline.empty:
+            c1, c2 = st.columns(2)
+            c1.plotly_chart(px.bar(topline, x="faculty", y="students", title="Talabalar soni — fakultetlar kesimida"),
+                            use_container_width=True)
+            c2.plotly_chart(px.bar(topline, x="faculty", y="net", title="Net (oylar yig‘indisi) — fakultetlar kesimida"),
+                            use_container_width=True)
+        download_buttons(topline, "rektor_topline")
